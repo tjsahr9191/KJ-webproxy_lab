@@ -10,14 +10,14 @@ int main(void) {
 
     /* Extract the two arguments */
     if ((buf = getenv("QUERY_STRING")) != NULL) {
-        p = strchr(buf, '&'); // buf -> number-1=15000 \0 number-2=213
+        p = strchr(buf, '&');
         *p = '\0';
 
-        // 문제 11.10을 위해 수정한 부분
-        strcpy(arg1, buf + 9); // arg1 -> numbe`r-1=15000 -> 15000
-        strcpy(arg2, p + 10); // arg2 -> number-2=213 -> 213
+        // [수정된 부분]
+        strcpy(arg1, buf); // "1"을 복사
+        strcpy(arg2, p + 1); // "2"를 복사
+        // [수정 끝]
 
-        // 문제 11.10을 위해 수정한 부분 - 끝
         n1 = atoi(arg1);
         n2 = atoi(arg2);
     }
