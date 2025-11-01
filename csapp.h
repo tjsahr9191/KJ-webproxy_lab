@@ -270,5 +270,8 @@ int Open_clientfd(char *hostname, char *port);
 int Open_listenfd(char *port);
 
 
+void echo(int connfd);
+
+
 #endif /* __CSAPP_H__ */
 /* $end csapp.h */
