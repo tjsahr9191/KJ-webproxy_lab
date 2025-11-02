@@ -37,14 +37,12 @@ int main(int argc, char **argv) {
     listenfd = Open_listenfd(argv[1]);
     while (1) {
         clientlen = sizeof(clientaddr);
-        connfd = Accept(listenfd, (SA *) &clientaddr,
-                        &clientlen); // line:netp:tiny:accept
-        Getnameinfo((SA *) &clientaddr, clientlen, hostname, MAXLINE, port, MAXLINE,
-                    0);
+        connfd = Accept(listenfd, (SA *) &clientaddr, &clientlen);
+        Getnameinfo((SA *) &clientaddr, clientlen, hostname, MAXLINE,
+                    port, MAXLINE, 0);
         printf("Accepted connection from (%s, %s)\n", hostname, port);
-        doit(connfd); // line:netp:tiny:doit
-        Close(connfd); // line:netp:tiny:close
-    }
+        doit(connfd);
+        Close(connfd);
     }
 }
 
@@ -57,8 +55,7 @@ void doit(int fd) {
 
     /* Read request line and headers */
     Rio_readinitb(&rio, fd);
-    if (!Rio_readlineb(&rio, buf, MAXLINE))
-        return;
+    Rio_readlineb(&rio, buf, MAXLINE);
     printf("Request headers:\n");
     printf("%s", buf);
     sscanf(buf, "%s %s %s", method, uri, version);
