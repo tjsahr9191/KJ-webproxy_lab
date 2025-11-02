@@ -4,6 +4,11 @@
 #include "csapp.h"
 
 int main(void) {
+    // volatile int i = 0;
+    // while (i == 0) {
+        // sleep(1);
+    // }
+
     char *buf, *p;
     char arg1[MAXLINE], arg2[MAXLINE], content[MAXLINE];
     int n1 = 0, n2 = 0;
