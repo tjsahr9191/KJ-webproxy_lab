@@ -4,10 +4,10 @@
 #include "csapp.h"
 
 int main(void) {
-    // volatile int i = 0;
-    // while (i == 0) {
-        // sleep(1);
-    // }
+    volatile int i = 0;
+    while (i == 0) {
+        sleep(1);
+    }
 
     char *buf, *p;
     char arg1[MAXLINE], arg2[MAXLINE], content[MAXLINE];
@@ -18,13 +18,14 @@ int main(void) {
         p = strchr(buf, '&');
         *p = '\0';
 
-        // [수정된 부분]
-        strcpy(arg1, buf); // "1"을 복사
-        strcpy(arg2, p + 1); // "2"를 복사
-        // [수정 끝]
+        strcpy(arg1, buf);
+        strcpy(arg2, p + 1);
 
-        n1 = atoi(arg1);
-        n2 = atoi(arg2);
+        // For homework 11.10
+        n1 = strtol(strchr(arg1, '=') + 1, NULL, 10);
+        n2 = strtol(strchr(arg2, '=') + 1, NULL, 10);
+        // n1 = atoi(arg1);
+        // n2 = atoi(arg2);
     }
 
     /* Make the response body */
