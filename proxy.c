@@ -32,8 +32,8 @@ int main(int argc, char **argv) {
         exit(1);
     }
 
-    Signal(SIGPIPE, SIG_IGN); // (힌트) SIGPIPE 무시 (중요)
-    cache_init();             // [추가] 캐시 초기화
+    Signal(SIGPIPE, SIG_IGN); // SIGPIPE 무시
+    cache_init();
 
     listenfd = Open_listenfd(argv[1]);
 
