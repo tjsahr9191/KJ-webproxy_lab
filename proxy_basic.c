@@ -8,23 +8,20 @@
 static const char *user_agent_hdr =
         "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120305 "
         "Firefox/10.0.3\r\n";
-/* BASIC */
+
+/* 함수 프로토타입 */
 void doit(int fd);
 void parse_uri(char *uri, char *host, char *port, char *path);
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg);
 
-/* Concurrency */
-void *thread_function(void *vargp);
-
 /*
- * main - 프록시의 메인 루틴. (동시성 적용)
+ * main - 프록시의 메인 루틴. tiny.c의 main과 거의 동일합니다.
  */
 int main(int argc, char **argv) {
-    int listenfd;
+    int listenfd, connfd;
     char hostname[MAXLINE], port[MAXLINE];
     socklen_t clientlen;
     struct sockaddr_storage clientaddr;
-    pthread_t tid; // 스레드 ID 변수 추가
 
     if (argc != 2) {
         fprintf(stderr, "usage: %s <port>\n", argv[0]);
@@ -35,41 +32,14 @@ int main(int argc, char **argv) {
 
     while (1) {
         clientlen = sizeof(clientaddr);
-
-        // 1. connfd를 위한 메모리를 힙에 할당 (스레드 경쟁 상태 방지)
-        int *connfd_ptr = Malloc(sizeof(int));
-
-        // 2. 연결 수락
-        *connfd_ptr = Accept(listenfd, (SA *)&clientaddr, &clientlen);
-
-        Getnameinfo((SA *)&clientaddr, clientlen, hostname, MAXLINE, port, MAXLINE, 0);
+        connfd = Accept(listenfd, (SA *) &clientaddr, &clientlen);
+        Getnameinfo((SA *) &clientaddr, clientlen, hostname, MAXLINE, port, MAXLINE,0);
         printf("Accepted connection from (%s, %s)\n", hostname, port);
 
-        // 3. 새 스레드를 생성하고 connfd_ptr을 인자로 전달
-        Pthread_create(&tid, NULL, thread_function, connfd_ptr);
+        doit(connfd);
+
+        Close(connfd);
     }
-}
-
-/*
- * 스레드의 메인 루틴 (시작 함수)
- */
-void *thread_function(void *vargp) {
-    // 1. 메인 스레드가 전달한 connfd_ptr(void*)를 int*로 변환
-    int connfd = *((int *)vargp);
-
-    // 2. 스레드를 분리(detach)하여 자원을 자동 해제하도록 설정
-    Pthread_detach(pthread_self());
-
-    // 3. connfd 값을 꺼냈으므로, 힙에 할당된 포인터 메모리 해제
-    Free(vargp);
-
-    // 4. 프록시의 핵심 로직 수행 (1부의 doit 함수 재사용)
-    doit(connfd);
-
-    // 5. 작업이 끝났으므로 클라이언트 소켓을 닫음 (매우 중요)
-    Close(connfd);
-
-    return NULL;
 }
 
 /*

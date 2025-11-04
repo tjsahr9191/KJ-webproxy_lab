@@ -29,7 +29,7 @@ csapp.o: csapp.c csapp.h
 	$(CC) $(CFLAGS) -c csapp.c
 
 # proxy.o 오브젝트 파일 빌드 규칙
-proxy.o: proxy.c csapp.h
+proxy.o: proxy_basic.c csapp.h
 	$(CC) $(CFLAGS) -c proxy.c
 
 # proxy 실행 파일 빌드 규칙
