@@ -64,30 +64,46 @@ void cache_init() {
  * cache_find - 'key'(URI)에 해당하는 객체를 찾아 clientfd로 전송
  * 성공 시 1, 실패(miss) 시 0 리턴
  */
+/*
+ * cache_find - 'key'(URI)에 해당하는 객체를 찾아 clientfd로 전송
+ * 성공 시 1, 실패(miss) 시 0 리턴
+ */
 int cache_find(char *key, int clientfd) {
+
+    char *data_copy; // [수정] 데이터를 복사할 로컬 포인터
+    int data_size;
+    int found = 0; // [수정] 찾았는지 여부를 기록할 플래그
+
     pthread_rwlock_rdlock(&cache_lock); // [읽기 락] 획득
 
     CacheNode *current = cache_head;
     while (current) {
         if (strcmp(current->key, key) == 0) {
             // [캐시 히트!]
-            
-            // 1. 데이터를 클라이언트에게 직접 전송
-            Rio_writen(clientfd, current->data, current->size);
 
-            /* * (선택사항) 만약 "읽기"도 LRU 갱신을 해야 한다면,
-             * 여기서 rdlock을 풀고, wrlock을 잡은 뒤 move_to_front()를
-             * 호출해야 하나, 이는 매우 복잡하고 성능 저하를 유발함.
-             * "LRU 근사" 요구사항은 쓰기/퇴출 정책만으로도 만족 가능.
-             */
-            
-            pthread_rwlock_unlock(&cache_lock); // [읽기 락] 해제
-            return 1; // 1 (찾았음)
+            // 1. [수정] 데이터를 즉시 전송하는 대신, Malloc과 memcpy로 복사
+            data_size = current->size;
+            data_copy = Malloc(data_size);
+            memcpy(data_copy, current->data, data_size);
+            found = 1;
+
+            // (LRU 근사를 위해 여기서 move_to_front 같은 쓰기 작업을
+            //  수행할 수도 있지만, 이 랩의 요구사항에는 필수가 아님)
+
+            break; // 찾았으므로 루프 탈출
         }
         current = current->next;
     }
 
     pthread_rwlock_unlock(&cache_lock); // [읽기 락] 해제
+
+    // [수정] 락을 푼 상태에서 복사본(data_copy)을 전송
+    if (found) {
+        Rio_writen(clientfd, data_copy, data_size);
+        Free(data_copy); // 복사본 사용 후 반드시 해제
+        return 1; // 1 (찾았음)
+    }
+
     return 0; // 0 (못 찾음)
 }
 

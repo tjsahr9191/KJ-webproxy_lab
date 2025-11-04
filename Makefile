@@ -32,7 +32,7 @@ csapp.o: csapp.c csapp.h
 proxy.o: proxy_basic.c csapp.h
 	$(CC) $(CFLAGS) -c proxy.c
 
-OBJS = proxy.o csapp.o cache.o
+OBJS = proxy.o csapp.o cache.o sbuf.o
 
 # proxy 실행 파일 빌드 규칙
 proxy: $(OBJS)
@@ -40,6 +40,9 @@ proxy: $(OBJS)
 
 cache.o: cache.c csapp.h cache.h
 	$(CC) $(CFLAGS) -c cache.c
+
+sbuf.o: sbuf.c csapp.h sbuf.h
+	$(CC) $(CFLAGS) -c sbuf.c
 
 # Creates a tarball in ../proxylab-handin.tar that you can then
 # hand in. DO NOT MODIFY THIS!

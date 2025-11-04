@@ -1,15 +1,8 @@
 #include "csapp.h"
 #include "cache.h"
-#include "sbuf.h"
-
 /* 권장되는 최대 캐시 및 객체 크기 */
 #define MAX_CACHE_SIZE 1049000
 #define MAX_OBJECT_SIZE 102400
-
-#define NTHREADS  4  // 워커 스레드 수
-#define SBUFSIZE 16  // 공유 버퍼(큐) 크기
-
-sbuf_t sbuf; // 공유 버퍼 전역 변수
 
 /* 제공된 User-Agent 헤더 상수 */
 static const char *user_agent_hdr =
@@ -27,38 +20,36 @@ void *thread_function(void *vargp);
  * main - 프록시의 메인 루틴. (동시성 적용)
  */
 int main(int argc, char **argv) {
-    int listenfd, connfd;
+    int listenfd;
     char hostname[MAXLINE], port[MAXLINE];
     socklen_t clientlen;
     struct sockaddr_storage clientaddr;
-    pthread_t tid;
+    pthread_t tid; // 스레드 ID 변수 추가
 
     if (argc != 2) {
         fprintf(stderr, "usage: %s <port>\n", argv[0]);
         exit(1);
     }
 
-    Signal(SIGPIPE, SIG_IGN);
+    Signal(SIGPIPE, SIG_IGN); // SIGPIPE 무시
     cache_init();
 
-    /* [수정] 스레드 풀 초기화 */
-    sbuf_init(&sbuf, SBUFSIZE);
     listenfd = Open_listenfd(argv[1]);
 
-    /* [수정] NTHREADS 개의 워커 스레드를 미리 생성 */
-    for (int i = 0; i < NTHREADS; i++) {
-        Pthread_create(&tid, NULL, thread_function, NULL);
-    }
-
-    /* [수정] main 스레드는 이제 '생산자' 역할만 수행 */
     while (1) {
         clientlen = sizeof(clientaddr);
-        connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen);
+
+        // 1. connfd를 위한 메모리를 힙에 할당 (스레드 경쟁 상태 방지)
+        int *connfd_ptr = Malloc(sizeof(int));
+
+        // 2. 연결 수락
+        *connfd_ptr = Accept(listenfd, (SA *)&clientaddr, &clientlen);
+
         Getnameinfo((SA *)&clientaddr, clientlen, hostname, MAXLINE, port, MAXLINE, 0);
         printf("Accepted connection from (%s, %s)\n", hostname, port);
 
-        /* connfd를 공유 버퍼에 삽입 */
-        sbuf_insert(&sbuf, connfd);
+        // 3. 새 스레드를 생성하고 connfd_ptr을 인자로 전달
+        Pthread_create(&tid, NULL, thread_function, connfd_ptr);
     }
 }
 
@@ -66,21 +57,22 @@ int main(int argc, char **argv) {
  * 스레드의 메인 루틴 (시작 함수)
  */
 void *thread_function(void *vargp) {
+    // 1. 메인 스레드가 전달한 connfd_ptr(void*)를 int*로 변환
+    int connfd = *((int *)vargp);
 
-    // 1. 스레드를 분리(detach)하여 자원을 자동 해제
+    // 2. 스레드를 분리(detach)하여 자원을 자동 해제하도록 설정
     Pthread_detach(pthread_self());
 
-    // 2. 워커 스레드는 무한 루프를 돌며 작업을 기다림
-    while (1) {
-        /* 공유 버퍼에서 connfd를 꺼냄 (없으면 대기) */
-        int connfd = sbuf_remove(&sbuf);
+    // 3. connfd 값을 꺼냈으므로, 힙에 할당된 포인터 메모리 해제
+    Free(vargp);
 
-        /* 핵심 로직 수행 */
-        doit(connfd);
+    // 4. 프록시의 핵심 로직 수행 (1부의 doit 함수 재사용)
+    doit(connfd);
 
-        /* 연결 종료 */
-        Close(connfd);
-    }
+    // 5. 작업이 끝났으므로 클라이언트 소켓을 닫음 (매우 중요)
+    Close(connfd);
+
+    return NULL;
 }
 
 /*
@@ -91,10 +83,6 @@ void doit(int fd) {
     char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
     char host[MAXLINE], port[MAXLINE], path[MAXLINE];
     char request_buf[MAXLINE]; // 서버로 보낼 요청을 저장할 버퍼
-
-    /* [수정] request_buf의 끝을 가리킬 포인터 선언 */
-    char *p = request_buf;
-
     rio_t client_rio, server_rio;
     int Does_send_host_header = 0; // Host 헤더 전송 여부 플래그
 
@@ -104,6 +92,7 @@ void doit(int fd) {
         return; // 빈 요청은 무시
     }
 
+    // 요청 라인 파싱 (예: "GET http://www.cmu.edu/hub/index.html HTTP/1.1")
     sscanf(buf, "%s %s %s", method, uri, version);
 
     if (strcasecmp(method, "GET")) {
@@ -112,6 +101,7 @@ void doit(int fd) {
         return;
     }
 
+    // [캐싱] 캐시 키로 전체 URI를 사용합니다.
     char cache_key[MAXLINE];
     strcpy(cache_key, uri);
 
@@ -120,7 +110,7 @@ void doit(int fd) {
      */
     if (cache_find(cache_key, fd)) {
         printf("Cache hit for %s\n", cache_key);
-        return;
+        return; // cache_find가 클라이언트에게 전송 완료
     }
     printf("Cache miss for %s\n", cache_key);
 
@@ -130,14 +120,15 @@ void doit(int fd) {
      */
     parse_uri(uri, host, port, path);
 
-    /* [수정] 3a. 포인터(p)를 이용해 request_buf에 쓰기 */
-    p += sprintf(p, "GET %s HTTP/1.0\r\n", path);
+    // 3a. 서버로 보낼 요청 라인 재조립
+    sprintf(request_buf, "GET %s HTTP/1.0\r\n", path);
 
-    /* [수정] 3b. 포인터를 이동시키며 헤더 이어 붙이기 */
+    // 3b. 클라이언트의 나머지 헤더 읽기 및 재조립
     while (Rio_readlineb(&client_rio, buf, MAXLINE) > 0) {
         if (strcmp(buf, "\r\n") == 0)
             break;
 
+        // 프록시가 직접 설정할 헤더는 건너뛰기
         if (strstr(buf, "User-Agent:"))
             continue;
         if (strstr(buf, "Connection:"))
@@ -145,55 +136,61 @@ void doit(int fd) {
         if (strstr(buf, "Proxy-Connection:"))
             continue;
 
+        // Host 헤더가 있는지 확인하고, 나머지 헤더는 그대로 추가
         if (strstr(buf, "Host:")) {
             Does_send_host_header = 1;
         }
-        /* p가 가리키는 곳(버퍼의 끝)에 안전하게 이어 씀 */
-        p += sprintf(p, "%s", buf);
+        sprintf(request_buf, "%s%s", request_buf, buf);
     }
 
-    /* [수정] 3c. 포인터를 이용해 필수 헤더 이어 붙이기 */
+    // 3c. 필수 헤더 추가
     if (!Does_send_host_header) {
-        p += sprintf(p, "Host: %s\r\n", host);
+        sprintf(request_buf, "%sHost: %s\r\n", request_buf, host);
     }
-    /* user_agent_hdr은 \r\n을 이미 포함하고 있습니다. */
-    p += sprintf(p, "%s", user_agent_hdr);
-    p += sprintf(p, "Connection: close\r\n");
-    p += sprintf(p, "Proxy-Connection: close\r\n");
-    p += sprintf(p, "\r\n"); // 헤더 끝
+    sprintf(request_buf, "%s%s", request_buf, user_agent_hdr);
+    sprintf(request_buf, "%sConnection: close\r\n", request_buf);
+    sprintf(request_buf, "%sProxy-Connection: close\r\n", request_buf);
+    sprintf(request_buf, "%s\r\n", request_buf); // 헤더 끝
 
     /* 4. 실제 웹 서버에 연결 및 요청 전송 */
     serverfd = Open_clientfd(host, port);
-
-    /* [수정] strlen 대신 포인터 연산으로 정확한 크기 전송 (더 안전함) */
-    Rio_writen(serverfd, request_buf, (p - request_buf));
+    Rio_writen(serverfd, request_buf, strlen(request_buf));
 
     /*
-     * 5. 서버 응답 중계 및 캐시 저장 (이 부분은 문제가 없었음)
+     * 5. 서버 응답 중계 및 캐시 저장
      */
     Rio_readinitb(&server_rio, serverfd);
     size_t n;
 
+    // 캐싱을 위한 임시 버퍼 할당
     char *cache_buf = Malloc(MAX_OBJECT_SIZE);
     int total_bytes_read = 0;
-    int can_cache = 1;
+    int can_cache = 1; // 객체가 MAX_OBJECT_SIZE 이하인지 추적
 
     while ((n = Rio_readnb(&server_rio, buf, MAXLINE)) > 0) {
+        // 5a. 클라이언트에게 즉시 전송
         Rio_writen(fd, buf, n);
+
+        // 5b. 캐시 버퍼에 데이터 누적
         if (can_cache) {
             if (total_bytes_read + n <= MAX_OBJECT_SIZE) {
+                // 바이너리 데이터이므로 memcpy 사용
                 memcpy(cache_buf + total_bytes_read, buf, n);
                 total_bytes_read += n;
             } else {
+                // 객체가 너무 커서 캐시 불가.
                 can_cache = 0;
             }
         }
     }
     Close(serverfd);
 
+    // 5c. 캐시 가능하면 캐시에 저장
     if (can_cache && total_bytes_read > 0) {
         cache_store(cache_key, cache_buf, total_bytes_read);
     }
+
+    // 임시 버퍼 해제
     Free(cache_buf);
 }
 

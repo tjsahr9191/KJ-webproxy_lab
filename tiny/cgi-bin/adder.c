@@ -21,11 +21,11 @@ int main(void) {
         strcpy(arg1, buf);
         strcpy(arg2, p + 1);
 
+        // n1 = atoi(arg1);
+        // n2 = atoi(arg2);
         // For homework 11.10
-        // n1 = strtol(strchr(arg1, '=') + 1, NULL, 10);
-        // n2 = strtol(strchr(arg2, '=') + 1, NULL, 10);
-        n1 = atoi(arg1);
-        n2 = atoi(arg2);
+        n1 = strtol(strchr(arg1, '=') + 1, NULL, 10);
+        n2 = strtol(strchr(arg2, '=') + 1, NULL, 10);
     }
 
     /* Make the response body */
