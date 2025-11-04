@@ -1,4 +1,5 @@
 #include "csapp.h"
+#include "cache.h"
 
 /* 권장되는 최대 캐시 및 객체 크기 */
 #define MAX_CACHE_SIZE 1049000
@@ -30,6 +31,9 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage: %s <port>\n", argv[0]);
         exit(1);
     }
+
+    Signal(SIGPIPE, SIG_IGN); // (힌트) SIGPIPE 무시 (중요)
+    cache_init();             // [추가] 캐시 초기화
 
     listenfd = Open_listenfd(argv[1]);
 
@@ -81,7 +85,7 @@ void doit(int fd) {
     char host[MAXLINE], port[MAXLINE], path[MAXLINE];
     char request_buf[MAXLINE]; // 서버로 보낼 요청을 저장할 버퍼
     rio_t client_rio, server_rio;
-    int Does_send_host_header = 0;
+    int Does_send_host_header = 0; // Host 헤더 전송 여부 플래그
 
     /* 1. 클라이언트로부터 요청 라인과 헤더 읽기 */
     Rio_readinitb(&client_rio, fd);
@@ -98,17 +102,33 @@ void doit(int fd) {
         return;
     }
 
+    // [캐싱] 캐시 키로 전체 URI를 사용합니다.
+    char cache_key[MAXLINE];
+    strcpy(cache_key, uri);
+
+    /*
+     * [캐싱] 2. 캐시에서 객체 찾기
+     */
+    if (cache_find(cache_key, fd)) {
+        printf("Cache hit for %s\n", cache_key);
+        return; // cache_find가 클라이언트에게 전송 완료
+    }
+    printf("Cache miss for %s\n", cache_key);
+
+
+    /* * 3. 캐시 미스(Miss): 서버에 요청 (1부 로직)
+     */
     parse_uri(uri, host, port, path);
 
-    /* 4. 서버로 보낼 HTTP 요청 재조립 (1단계: 요청 라인) */
-    // 프록시는 HTTP/1.0 요청을 보냅니다.
+    // 3a. 서버로 보낼 요청 라인 재조립
     sprintf(request_buf, "GET %s HTTP/1.0\r\n", path);
 
-    /* 5. 클라이언트의 나머지 헤더 읽기 및 서버 요청 재조립 (2단계: 헤더) */
+    // 3b. 클라이언트의 나머지 헤더 읽기 및 재조립
     while (Rio_readlineb(&client_rio, buf, MAXLINE) > 0) {
         if (strcmp(buf, "\r\n") == 0)
             break;
 
+        // 프록시가 직접 설정할 헤더는 건너뛰기
         if (strstr(buf, "User-Agent:"))
             continue;
         if (strstr(buf, "Connection:"))
@@ -116,40 +136,63 @@ void doit(int fd) {
         if (strstr(buf, "Proxy-Connection:"))
             continue;
 
+        // Host 헤더가 있는지 확인하고, 나머지 헤더는 그대로 추가
         if (strstr(buf, "Host:")) {
             Does_send_host_header = 1;
         }
         sprintf(request_buf, "%s%s", request_buf, buf);
     }
 
-    /* 6. 필수 헤더 추가 (3단계: 고정 헤더) */
-    // 클라이언트가 Host 헤더를 보내지 않았다면, URI에서 파싱한 호스트로 추가
+    // 3c. 필수 헤더 추가
     if (!Does_send_host_header) {
         sprintf(request_buf, "%sHost: %s\r\n", request_buf, host);
     }
-    // 고정된 헤더 추가
     sprintf(request_buf, "%s%s", request_buf, user_agent_hdr);
     sprintf(request_buf, "%sConnection: close\r\n", request_buf);
     sprintf(request_buf, "%sProxy-Connection: close\r\n", request_buf);
+    sprintf(request_buf, "%s\r\n", request_buf); // 헤더 끝
 
-    // 헤더 섹션의 끝을 알리는 빈 줄 추가
-    sprintf(request_buf, "%s\r\n", request_buf);
-
-    /* 7. 실제 웹 서버에 연결 */
-    // printf("Connecting to %s:%s\n", host, port); // 디버깅용
+    /* 4. 실제 웹 서버에 연결 및 요청 전송 */
     serverfd = Open_clientfd(host, port);
-
-    /* 8. 재조립된 요청을 서버에 전송 */
     Rio_writen(serverfd, request_buf, strlen(request_buf));
 
-    /* 9. 서버의 응답을 읽어 클라이언트에 그대로 전달 (중계) */
+    /*
+     * 5. 서버 응답 중계 및 캐시 저장
+     */
     Rio_readinitb(&server_rio, serverfd);
     size_t n;
+
+    // 캐싱을 위한 임시 버퍼 할당
+    char *cache_buf = Malloc(MAX_OBJECT_SIZE);
+    int total_bytes_read = 0;
+    int can_cache = 1; // 객체가 MAX_OBJECT_SIZE 이하인지 추적
+
     while ((n = Rio_readnb(&server_rio, buf, MAXLINE)) > 0) {
+        // 5a. 클라이언트에게 즉시 전송
         Rio_writen(fd, buf, n);
+
+        // 5b. 캐시 버퍼에 데이터 누적
+        if (can_cache) {
+            if (total_bytes_read + n <= MAX_OBJECT_SIZE) {
+                // 바이너리 데이터이므로 memcpy 사용
+                memcpy(cache_buf + total_bytes_read, buf, n);
+                total_bytes_read += n;
+            } else {
+                // 객체가 너무 커서 캐시 불가.
+                can_cache = 0;
+            }
+        }
     }
 
     Close(serverfd);
+
+    // 5c. 캐시 가능하면 캐시에 저장
+    if (can_cache && total_bytes_read > 0) {
+        cache_store(cache_key, cache_buf, total_bytes_read);
+    }
+
+    // 임시 버퍼 해제
+    Free(cache_buf);
 }
 
 /*
