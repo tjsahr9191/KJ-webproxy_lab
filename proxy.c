@@ -6,7 +6,7 @@
 #define MAX_CACHE_SIZE 1049000
 #define MAX_OBJECT_SIZE 102400
 
-#define NTHREADS  4  // 워커 스레드 수
+#define NTHREADS  6  // 워커 스레드 수
 #define SBUFSIZE 16  // 공유 버퍼(큐) 크기
 
 sbuf_t sbuf; // 공유 버퍼 전역 변수
